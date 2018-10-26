@@ -1,0 +1,422 @@
+
+C++的汇编方式以及内存分配
+
+一．背景
+
+随着C++在我们代码中使用得越来越多，C++代码发生异常的概率也越来越大。经验丰富的C++开发者可以通过异常调用栈走读代码来定位问题，但也并非所有问题都能这样解决。这时候，就需要设法透过C++精致的语法，看清它的本质：汇编方式以及内存分配。
+
+二．C++的符号修饰
+
+任何函数，全局变量等都得有个符号，在C中，这个符号就是它本身的命名，而C++由于其多态性，不同类中，会出现重名，这时就需要进行符号修饰。
+
+这个过程是由编译器来实现的，不同的编译器对符号的修饰是不同的，gcc环境下，所有符号前都会被加上“_ZN”，再进行具体的修饰。
+
+已经修饰过的符号，可以用“c++filt”来进行还原，例如：
+
+> c++filt  _ZN7CTrmMsgD0Ev
+
+CTrmMsg::~CTrmMsg()
+
+> c++filt  _ZN14CLocalLayerMsgC2EjP11CObjFactoryjjjj
+
+CLocalLayerMsg::CLocalLayerMsg(unsigned int, CObjFactory*, unsigned int, unsigned int, unsigned int, unsigned int)
+
+> c++filt  _ZN6CTimer16ProcBaseTimerMsgEP5MsgCB
+
+CTimer::ProcBaseTimerMsg(MsgCB*)
+
+后续对C++的反汇编，都是针对这一个个的符号。有关符号修饰的详细规则，此处不展开。
+
+ 三．对象的创建过程
+
+       本文以3.6版本RB传输的C++代码为例，并在LMICRO板上运行并讲解:
+
+       class CTrmMsg : public CLocalLayerMsg {
+
+         public:
+
+         static CTrmMsg &Instance();
+
+         virtual VOS_UINT32 Init();
+
+         static VOS_UINT32 ProcFmCapNegReq(MsgType *pMsg);
+
+          private:
+
+         CTrmMsg();
+
+         virtual ~CTrmMsg();
+
+         static CTrmMsg *ptheInstance;
+
+         CTrmMsg(const CTrmMsg &);
+
+         CTrmMsg &operator=(const CTrmMsg &v);
+
+};
+
+CTrmMsg &CTrmMsg::Instance() {
+
+    if (VOS_NULL_PTR == ptheInstance) {
+
+        ptheInstance = new CTrmMsg;
+
+    }
+
+    return *ptheInstance;
+
+}
+
+在基站启动阶段，断住CTrmMsg::Instance这个创建对象的函数，
+
+Dump of assembler code for function _ZN7CTrmMsg8InstanceEv:                    
+
+   0x41cdd420 <+0>:     mov     r12, sp                                        
+
+   0x41cdd424 <+4>:     push    {r4, r5, r11, r12, lr, pc}                     
+
+   0x41cdd428 <+8>:     sub     r11, r12, #4                                   
+
+=> 0x41cdd42c <+12>:    ldr     r3, [pc, #56]   ; 0x41cdd46c
+
+    ……………………
+
+    ……………………
+
+   0x41cdd450 <+48>:    mov     r0, #204        ; 0xcc                         
+
+   0x41cdd454 <+52>:    bl      0x419abae0  /* ->_Znwj   -> new */                      
+
+   0x41cdd458 <+56>:    mov     r4, r0                                         
+
+           0x41cdd45c <+60>:    bl      0x419993d8   /*-> _ZN7CTrmMsgC2Ev-> CTrmMsg::CTrmMsg() */                                  
+
+   0x41cdd460 <+64>:    str     r4, [r5]                                       
+
+   0x41cdd464 <+68>:    mov     r0, r4                                         
+
+   0x41cdd468 <+72>:    ldm     sp, {r4, r5, r11, sp, pc}                      
+
+   0x41cdd46c <+76>:    ldrbgt  r1, [r6], #2816 ; 0xb00                        
+
+0x41cdd470 <+80>:    ldc2l   0, cr0, [r6], {0}                              
+
+End of assembler dump.
+
+ 
+
+其中，bl      0x419abae0   跳转函数为_Znwj  
+
+> c++filt  _Znwj
+
+operator new(unsigned int)
+
+接着运行让程序运行完new函数：
+
+   0x41cdd454 <+52>:    bl      0x419abae0                                      
+
+=> 0x41cdd458 <+56>:    mov     r4, r0
+
+然后获得其返回值（ARM体系，返回值存储于R0）：
+
+(gdb) i r                                                                      
+
+r0             0xb0833bb8       2961390520                                     
+
+r1             0x0      0                                                       
+
+r2             0x42cab248       1120580168                                     
+
+r3             0x41e9ab00       1105832704
+
+……………………
+
+这个返回值当然是为该对象申请的内存，此时查看内存里的值：
+
+x/20x 0xb0833bb8                                                         
+
+0xb0833bb8:     0x42cab278      0x42cab278      0x00000000      0x00000000     
+
+0xb0833bc8:     0x00000000      0x00000000      0x00000000      0x00000000     
+
+0xb0833bd8:     0x00000000      0x00000000      0x00000000      0x00000000     
+
+0xb0833be8:     0x00000000      0x00000000      0x00000000      0x00000000     
+
+0xb0833bf8:     0x00000000      0x00000000      0x00000000      0x00000000 
+
+ 
+
+该内存处于未初始化的状态，因为汇编代码还未进行下一步，也就是构造函数的执行：
+
+bl      0x419993d8  跳转函数为_ZN7CTrmMsgC2Ev
+
+> c++filt  _ZN7CTrmMsgC2Ev
+
+CTrmMsg::CTrmMsg()
+
+当该构造函数执行完毕，再次查看刚才的内存：
+
+x/20x 0xb0833bb8                                                         
+
+0xb0833bb8:     0x41e97278      0x41e90830      0xffffffff      0x00000000     
+
+0xb0833bc8:     0x41e907e8      0x00000000      0x00000000      0x00000000     
+
+0xb0833bd8:     0x000000fe      0x00000000      0x42100000      0x000001f4     
+
+0xb0833be8:     0x00000000      0xb0833c88      0x00000000      0xffffffff     
+
+0xb0833bf8:     0x00000000      0x00000000      0x00000000      0xb0833bfc
+
+ 
+
+此时该对象的内容就已经填充好了，这些数据包括了各种变量，结构体等数据，但不包括普通成员函数，因为普通成员函数是当做全局函数来调用的，例如刚才调用的CTrmMsg::Instance和CTrmMsg::CTrmMsg()，它们的符号指针不需要存于对象结构中。
+
+ 值得注意的是，CTrmMsg::CTrmMsg()不仅填充了自己的成员数据，还通过调用自己父类的构造函数，填充了父类的成员数据。当然父类的构造函数也会调更上一层父类的构造函数填写这些数据。如果展开这些构造函数的汇编代码，就会发现它们在填充这些数据时，都是通过0xb0833bb8（R0）这个子类所在的对象首地址为基准，然后进行偏移，找到存储位置的。例如上面标成紫色的0x000001f4 ，它就是CTrmMsg的父类的父类CMsg下属的一个CTimer类中的成员：m_ulBaseTmLen。详细过程这里就不展开了。
+
+此外，构造函数还会填充一个重要的成员：虚函数表。它位于整个对象结构的头部，也就是0xb0833bb8（R0）的首地址处，也就是上面标成绿色的0x41e97278 ，这个表里存放了所有属于该类的虚函数指针，具体在下节详表。
+
+填充完对象结构，整个对象创建就结束了，0xb0833bb8（R0）这个指针将会在每个成员函数中传入，这个指针就是我们所熟知的This指针。
+
+ 
+
+四．虚函数表
+
+（1）普通虚函数
+
+查看刚才获得的虚函数表的内存内容：
+
+x/20x 0x41e97278
+
+0x41e97278 <_ZTV7CTrmMsg+8>:    0x41cdd308      0x41cdd354      0x41cdd2b8     0
+
+x41d5f788                                                                      
+
+0x41e97288 <_ZTV7CTrmMsg+24>:   0x41d5f79c      0x41d5f7b8      0x41d5f9a8     0
+
+x41d5f1cc                                                                       
+
+0x41e97298 <_ZTV7CTrmMsg+40>:   0x41d5f12c      0x41d5f140      0x41d60968     0
+
+x41d608b8                                                                      
+
+0x41e972a8 <_ZTV7CTrmMsg+56>:   0x41d60808      0x41d5f7d4      0x41d5f80c     0
+
+x41d5f838                                                                      
+
+0x41e972b8 <_ZTV7CTrmMsg+72>:   0x41d5f864      0x41d60424      0x41d5f890     0
+
+x41d5f8a4
+
+进入正题前先解析下_ZTV7CTrmMsg这个符号：
+
+> c++filt _ZTV7CTrmMsg
+
+vtable for CTrmMsg      -----说明虚函数表也需要符号修饰
+
+现在进入正题，随便查个里面存储的虚函数符号：0x41d5f864     
+
+首先反汇编：
+
+disas 0x41d5f864     
+
+Dump of assembler code for function _ZN4CMsg11BatchRmvObjEiP5MsgCB:
+
+………………………
+
+然后符号解析：
+
+> c++filt _ZN4CMsg11BatchRmvObjEiP5MsgCB
+
+CMsg::BatchRmvObj(int, MsgCB*)
+
+之前说了CMsg是CTrmMsg的父类的父类，由此证明子类继承的虚函数，也是存入同一张虚函数表的
+
+（2）虚函数的重载
+
+上面举的例子中，CMsg::BatchRmvObj是没有被子类重载的，那么需要被重载的虚函数呢？这里先把CMsg的类定义打出来一部分：
+
+class CMsg {
+
+  ……………………
+
+ 
+
+    virtual VOS_UINT32 ProcMsgMap(MsgType *pMsg);
+
+   ………………………
+
+    virtual VOS_VOID *GetCfgDataHeadByMsg(MsgType *pMsg) = 0;
+
+    virtual VOS_VOID *GetDspDataHeadByMsg(MsgType *pMsg, DspType &enDspType) = 0;
+
+        virtual VOS_UINT32 AddObj(CID cid, MsgType *pMsg);
+
+    virtual VOS_UINT32 ModObj(CID cid, MsgType *pMsg);
+
+    virtual VOS_UINT32 RmvObj(CID cid, MsgType *pMsg);
+
+    virtual VOS_UINT32 BatchHandleObj(OperType type, CID cid, MsgType *pMsg);
+
+    virtual VOS_UINT32 BatchAddObj(CID cid, MsgType *pMsg);
+
+    virtual VOS_UINT32 BatchModObj(CID cid, MsgType *pMsg);
+
+    virtual VOS_UINT32 BatchRmvObj(CID cid, MsgType *pMsg);
+
+    ……………………………
+
+    }
+
+代码中标成紫色的3个虚函数是被子类重载了的，因此从BatchRmvObj按顺序数回去，可以对应到虚函数表里的3个函数指针，也用紫色标志了出来（见上一节的虚函数表内存），同样先进行反汇编：
+
+disas 0x41d5f140                                                          
+
+Dump of assembler code for function _ZN14CLocalLayerMsg19GetDspDataHeadByMsgEP5MsgCBRN4CMsg7DspTypeE:
+
+………………
+
+disas 0x41d5f12c                                                         
+
+Dump of assembler code for function _ZN14CLocalLayerMsg19GetCfgDataHeadByMsgEP5MsgCB: 
+
+………………
+
+disas 0x41d5f1cc                                                         
+
+Dump of assembler code for function _ZN14CLocalLayerMsg10ProcMsgMapEP5MsgCB:
+
+………………
+
+      然后是符号解析：
+
+> c++filt _ZN14CLocalLayerMsg19GetDspDataHeadByMsgEP5MsgCBRN4CMsg7DspTypeE
+
+CLocalLayerMsg::GetDspDataHeadByMsg(MsgCB*, CMsg::DspType&)
+
+> c++filt _ZN14CLocalLayerMsg19GetCfgDataHeadByMsgEP5MsgCB
+
+CLocalLayerMsg::GetCfgDataHeadByMsg(MsgCB*)
+
+> c++filt _ZN14CLocalLayerMsg10ProcMsgMapEP5MsgCB
+
+CLocalLayerMsg::ProcMsgMap(MsgCB*)
+
+可以看出，本属于CMsg的虚函数在虚函数表中的位置-----由于它们被子类（CLocalLayerMsg）重载--------被子类重载后的虚函数占据了。
+
+（3）纯虚函数的陷阱
+
+细心的人应该注意到了，上节的三个虚函数中，有两个是纯虚函数，虽然它们和虚函数一样进行重载，但是它们在基类中是不需要定义的，那这时候在基类的虚函数表中，它们所在的位置是存放的什么呢？
+
+_ZTV4CMsg是CMsg这个基类的虚函数表，同样把那三个函数标成紫色：
+
+x/20x &_ZTV4CMsg                                                         
+
+0x41e98ac0 <_ZTV4CMsg>: 0x00000000      0x41e98ab8      0x41d61a24      0x41d61a
+
+c8                                                                             
+
+0x41e98ad0 <_ZTV4CMsg+16>:      0x41d60a18      0x41d5f788      0x41d5f79c     0
+
+x41d5f7b8                                                                      
+
+0x41e98ae0 <_ZTV4CMsg+32>:      0x41d5f9a8      0x41d613d4      0x00406ef8     0
+
+x00406ef8                                                                       
+
+0x41e98af0 <_ZTV4CMsg+48>:      0x41d60968      0x41d608b8      0x41d60808     0
+
+x41d5f7d4                                                                      
+
+0x41e98b00 <_ZTV4CMsg+64>:      0x41d5f80c      0x41d5f838      0x41d5f864     0
+
+x41d60424  
+
+现在先看看那个非纯虚函数：
+
+disas 0x41d613d4                                                         
+
+Dump of assembler code for function _ZN4CMsg10ProcMsgMapEP5MsgCB:
+
+……………………
+
+c++filt _ZN4CMsg10ProcMsgMapEP5MsgCB
+
+CMsg::ProcMsgMap(MsgCB*)
+
+这是这个函数被子类重载前的摸样。
+
+然后看看后面的两个纯虚函数：
+
+0x00406ef8明显不是一个正常的函数指针，经解析，发现它指向的是__cxa_pure_virtual这个C++库函数（解析过程涉及动态链接库的延迟绑定流程，可参见我另外篇文章，这里不展开）。
+
+那么，如果程序发生了异常，或者语法逻辑有缺陷，使得程序从基类中调用了纯虚函数，会有什么后果呢？现在可以在gdb下强行调用下：
+
+gdb) call malloc(100)                                                                                                              
+
+$2 = -1333302320
+
+(gdb)call 0x00406ef8(-1333302320)                                             
+
+pure virtual method called                                                     
+
+terminate called without an active exception                                   
+
+                                                                    
+
+Program received signal SIGABRT, Aborted.                                       
+
+0x42ba7e58 in raise () from /lib/libc.so.6                                     
+
+The program being debugged was signaled while in a function called from GDB.   
+
+GDB remains in the frame where the signal was received.                         
+
+To change this behavior use "set unwindonsignal on".                           
+
+Evaluation of the expression containing the function                           
+
+(__cxa_pure_virtual) will be abandoned.                                         
+
+When the function is done executing, GDB will silently stop.                   
+
+(gdb) bt                                                                       
+
+#0  0x42ba7e58 in raise () from /lib/libc.so.6                                 
+
+#1  0x42babc00 in abort () from /lib/libc.so.6                                 
+
+#2  0x42ad4cd0 in __gnu_cxx::__verbose_terminate_handler() ()                  
+
+   from /lib/libstdc++.so.6                                                    
+
+#3  0x42ad2c7c in __cxxabiv1::__terminate(void (*)()) ()                       
+
+   from /lib/libstdc++.so.6                                                    
+
+#4  0x42ad2ca4 in std::terminate() () from /lib/libstdc++.so.6                 
+
+#5  0x42ad39c8 in __cxa_pure_virtual () from /lib/libstdc++.so.6               
+
+#6  <function called from gdb> 
+
+ 
+
+从上面可以看出，__cxa_pure_virtual实际上就是C++的一个异常分支，当调用纯虚函数时，就会进入这里并让进程退出。
+
+五．后记
+
+实际上，直接调用纯虚函数的情况基本上不会发生，因为编译器会检查并报错。而这篇文章之所以提出这个，是因为之前出现了一次非语法错误造成这样的异常：
+
+产品模块新开发代码中定义了一个类，这个类的名字与RB的一个类名完全相同，而RB的这个类是在动态链接库中，因此，RB这个类定义就不幸地被产品这个类定义挤出了全局符号表，更不幸的是产品这个类里基本上全是纯虚函数，因此RB的正常虚函数调用就不可避免的掉进这个坑里了。
+
+由于本人对C++相关语法几乎是一片空白，因此定位该问题花了很长时间，这也是写这篇文章的源头所在。同时，文章肯定有一些C++理论知识的纰漏，欢迎指正。
+
+ 
+
+参考文档：
+
+http://3ms.huawei.com/hi/blog/4172_1269465.html?h=h
+
+----【嵌入式系统C++开发指南】——5.5 RTTI的内存布局及空间计算---陈灵
