@@ -1,6 +1,113 @@
 
-1.gdb相关：
+一.gdb相关：
 https://www.jianshu.com/p/1e6141721ba9
 https://blog.csdn.net/stpeace/article/details/51416297
 https://blog.csdn.net/chun_1959/article/details/45867527
 https://blog.csdn.net/moonsheep_liu/article/details/39099969
+
+二、GDB相关命令总结
+1、设置断点：break [函数名、行号、+offset、-offset、filename:[linenum、function]] [if <condition>]
+   命令缩写：b
+ 
+2、查看断点：info breakpoints [n]
+
+3、删除断点：delete [断点号]
+   命令缩写：d
+
+4、执行到下一个断点：continue [ignore-count]（相当于VC的F5）
+   命令缩写：c
+   
+5、单步执行：next <count>（相当于VC的F10）
+   命令缩写：n
+   
+6、单步执行：step <count>（相当于VC的F11）
+   命令缩写：s
+   
+7、函数完成返回：finish
+
+8、退出循环体：until
+
+9、单步调试一条机器指令：stepi
+   命令缩写：si
+
+10、单步调试一条机器指令：nexti
+   命令缩写：ni
+   
+11、查看正在运行程序中的线程信息：info threads
+
+12、断点是否在某个特定的线程上：break <linespec> thread <threadno>
+
+13、查看栈信息：backtrace
+   命令缩写：bt
+
+14、打印栈顶上n层的栈信息：backtrace <n>
+   
+15、打印栈底下n层的栈信息：backtrace <-n>
+
+16、查看某一层的信息：frame <n>
+
+17、向栈的上面移动n层：up <n>
+
+18、向栈的下面移动n层：down <n>
+
+19、打印出更为详细的当前栈层的信息：info frame
+
+20、打印出当前函数的参数名及其值：info args
+
+21、打印出当前函数中所有局部变量及其值：info locals
+
+22、打印出当前的函数中的异常处理信息：info catch
+
+23、查看当前程序的运行数据：print /<f> <expr>
+   命令缩写：p
+   
+24、查看静态数组：print 数组名
+
+25、查看一段连续的内存空间：print *array@len
+
+26、输出格式：
+  x 按十六进制格式显示变量。
+  d 按十进制格式显示变量。
+  u 按十六进制格式显示无符号整型。
+  o 按八进制格式显示变量。
+  t 按二进制格式显示变量。
+  a 按十六进制格式显示变量。
+  c 按字符格式显示变量。
+  f 按浮点数格式显示变量。
+
+27、查看内存：examine/<n/f/u> <addr>
+   命令缩写：x
+   
+28、自动显示的变量：display/<fmt> <expr>
+
+29、查看当前所设置的所有的环境变量：show convenience
+
+30、定义自己的变量：set $环境变量名 = 值
+
+31、查看寄存器的情况（除了浮点寄存器）：info registers
+
+32、查看所有寄存器的情况。（包括浮点寄存器）：info all-registers
+
+33、查看所指定的寄存器的情况：info registers <regname ...>
+
+34、修改变量值：print 变量名=变量值
+
+35、变量和GDB中的参数冲突使用：set var width=47
+
+36、取消当前函数的执行，并立即返回：return <expression>
+
+37、强制调用函数：call <expr>
+
+38、反汇编：disassemble [/m ] [<expr>,address]
+
+39、识别数组或变量的类型 ：whatis
+
+40、提供一个结构的定义：ptype
+
+41、允许使用历史命令：set history expansion on
+
+42、申请一块内存：call $变量名 = malloc(size)
+
+43、释放一块内存：call free($变量名)
+
+44、指针参数的传递：call 函数（$pointer）
